@@ -72,14 +72,17 @@ app.get('/api/route', (req, res) => {
     }
     
     // UPDATED: Accept all new environmental parameters
+    // ev new : adding shipLength, beam, hullType to req.query
     const { 
-        start, end, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S,
+        start, end,shipLength,beam,hullType ,
+        speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S,
         rainProbability, rainIntensity, seaDepth, windStrength, windDirection,
         currentStrength, currentDirection, waveHeight, waveDirection
     } = req.query;
 
     // UPDATED: Validation check for all parameters
-    const requiredParams = { start, end, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, rainProbability, rainIntensity, seaDepth, windStrength, windDirection, currentStrength, currentDirection, waveHeight, waveDirection };
+    // ev new : adding shipLength, beam, hullType to requiredParams
+    const requiredParams = { start, end,shipLength,beam,hullType, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, rainProbability, rainIntensity, seaDepth, windStrength, windDirection, currentStrength, currentDirection, waveHeight, waveDirection };
     for (const param in requiredParams) {
         if (!requiredParams[param]) {
             return res.status(400).json({ error: `Missing required parameter: ${param}.` });
@@ -93,7 +96,9 @@ app.get('/api/route', (req, res) => {
         const pathfinder = new AStarPathfinder();
 
         // UPDATED: Pass all parameters to the pathfinder
+        // ev new : adding shipLength, beam, hullType to params
         const params = {
+            shipLength: parseFloat(shipLength), beam: parseFloat(beam), hullType: hullType,
             speed: parseFloat(speed), draft: parseFloat(draft), hpReq: parseFloat(hpReq),
             fuelRate: parseFloat(fuelRate), k: parseFloat(k), baseWeight: parseFloat(baseWeight),
             load: parseFloat(load), F: parseFloat(F), S: parseFloat(S),
@@ -139,6 +144,8 @@ app.post('/api/grid/update', (req, res) => {
         res.status(500).json({ error: 'Failed to save grid updates.' });
     }
 });
+
+
 
 app.get("/api/depth", async (req, res) => {
     const startLatLng = { lat: parseFloat(req.query.startLat), lng: parseFloat(req.query.startLon) };
