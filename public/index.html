@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maritime Sea Navigation</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""/>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+        body { margin: 0; padding: 0; font-family: 'Inter', sans-serif; background-color: #1a202c; }
+        #map { height: 100vh; width: 100vw; cursor: crosshair; }
+        .leaflet-popup-content-wrapper { background: #2d3748; color: #e2e8f0; border-radius: 0.5rem; }
+        .leaflet-popup-tip { background: #2d3748; }
+        .custom-control { transition: all 0.3s ease; }
+        .custom-control:hover { transform: scale(1.05); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
+        .info-label { cursor: help; border-bottom: 1px dotted #9ca3af; }
+        #tooltip {
+            position: fixed;
+            background-color: #1f2937;
+            color: #d1d5db;
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #4b5563;
+            font-size: 0.8rem;
+            max-width: 250px;
+            z-index: 2000;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .port-search-input {
+            width: 100%;
+            background-color: #374151;
+            border: 1px solid #4b5563;
+            color: #e2e8f0;
+            border-radius: 0.375rem;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.875rem;
+        }
+        .port-search-input:focus {
+            outline: none;
+            border-color: #3b82f6;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.5);
+        }
+        .sidebar, .navigation-hud, .turn-by-turn-panel {
+            z-index: 1000;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+
+    <div id="map"></div>
+    
+    <div id="messageBox" class="fixed top-5 left-1/2 -translate-x-1/2 bg-blue-600 text-white py-3 px-6 rounded-lg shadow-lg z-[1000] text-center transition-opacity duration-300 opacity-0">
+        Select a starting point.
+    </div>
+
+    <!-- LEFT SIDEBAR -->
+    <div class="sidebar fixed top-5 left-5 bg-gray-800 bg-opacity-80 backdrop-blur-sm p-4 rounded-lg shadow-lg text-white w-72 max-h-[calc(100vh-40px)] overflow-y-auto">
+        
+        <div class="route-planner-panel space-y-3">
+            <h2 class="text-lg font-bold mb-2 border-b border-gray-600 pb-2">Route Planner</h2>
+            <div>
+                <label for="startPort" class="block text-sm font-medium text-gray-300 mb-1">Start Port</label>
+                <input type="text" id="startPort" list="ports-list" class="port-search-input" placeholder="Search for starting port...">
+            </div>
+            <div>
+                <label for="endPort" class="block text-sm font-medium text-gray-300 mb-1">End Port</label>
+                <input type="text" id="endPort" list="ports-list" class="port-search-input" placeholder="Search for destination port...">
+            </div>
+            <datalist id="ports-list"></datalist>
+        </div>
+
+        <div class="vessel-panel mt-6">
+            <h2 class="text-lg font-bold mb-3 border-b border-gray-600 pb-2">Vessel & Environment</h2>
+            <div class="space-y-3 text-sm">
+                <!-- Vessel Specs and Environmental Factors inputs remain here -->
+                 <p class="font-semibold text-gray-400">Vessel Specs</p>
+                <div class="flex justify-between items-center">
+                    <label for="shipType" class="info-label" data-tooltip="Select a vessel type to load its typical parameters.">Ship Type</label>
+                    <select id="shipType" class="w-32 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                        <option value="fishing_trawler">Fishing Trawler</option>
+                        <option value="handysize_bulk">Handysize Bulk Carrier</option>
+                        <option value="panamax_container">Panamax Container Ship</option>
+                        <option value="aframax_tanker">Aframax Tanker</option>
+                        <option value="vlcc_tanker">VLCC Supertanker</option>
+                        <option value="cruise_ship">Cruise Ship</option>
+                    </select>
+                </div>
+                <div class="flex justify-between items-center">
+                    <label for="baseWeight" class="info-label" data-tooltip="The ship's empty weight (displacement) in tons.">Base Weight (tons)</label>
+                    <input type="number" id="baseWeight" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+                <div class="flex justify-between items-center">
+                    <label for="load" class="info-label" data-tooltip="The weight of cargo, fuel, and supplies in tons.">Cargo Load (tons)</label>
+                    <input type="number" id="load" min="0" max="600000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+                <div class="flex justify-between items-center">
+                    <label for="shipSpeed" class="info-label" data-tooltip="The vessel's target cruising speed in knots.">Target Speed (knots)</label>
+                    <input type="number" id="shipSpeed" min="1" max="40" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+                <div class="flex justify-between items-center">
+                    <label for="shipDraft" class="info-label" data-tooltip="The vertical distance between the waterline and the bottom of the hull (keel) in meters. Deeper draft requires deeper water.">Draft (meters)</label>
+                    <input type="number" id="shipDraft" min="1" max="30" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+
+                <p class="font-semibold text-gray-400 pt-2">Engine Efficiency</p>
+                <div class="flex justify-between items-center">
+                    <label for="hpReq" class="info-label" data-tooltip="The typical horsepower required for cruising speed.">HP Required</label>
+                    <input type="number" id="hpReq" min="1" max="150000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+                <div class="flex justify-between items-center">
+                    <label for="fuelRate" class="info-label" data-tooltip="Specific Fuel Consumption (SFC). Liters of fuel consumed per horsepower per hour. Typically 0.18-0.22 for large marine diesels.">Fuel Rate (L/hp-hr)</label>
+                    <input type="number" id="fuelRate" min="0.1" max="0.3" step="0.01" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+
+                <p class="font-semibold text-gray-400 pt-2">Environmental Factors</p>
+                <div class="flex justify-between items-center">
+                    <label for="hullFactor" class="info-label" data-tooltip="Represents how efficiently the hull handles added weight. Lower is better. Typically 0.3-0.7.">Hull Load Factor (k)</label>
+                    <input type="number" id="hullFactor" min="0.2" max="1.0" step="0.1" value="0.3" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+                <div class="flex justify-between items-center">
+                    <label for="foulingFactor" class="info-label" data-tooltip="Represents drag from marine growth on the hull. A new ship is 1.0. A ship after 1 year could be 1.1-1.3.">Fouling Factor (F)</label>
+                    <input type="number" id="foulingFactor" min="1.0" max="1.5" step="0.1" value="1.2" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+                <div class="flex justify-between items-center">
+                    <label for="seaStateFactor" class="info-label" data-tooltip="Represents drag from waves and weather. Calm seas = 1.0. Moderate = 1.2-1.5. Heavy = 1.5+.">Sea State (S)</label>
+                    <input type="number" id="seaStateFactor" min="1.0" max="2.0" step="0.1" value="1.3" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
+                </div>
+            </div>
+            
+            <div id="metrics-display" class="mt-4 pt-3 border-t border-gray-600 text-sm hidden"></div>
+        </div>
+    </div>
+
+    <!-- NEW: TOP-CENTER TURN-BY-TURN PANEL -->
+    <div id="turn-by-turn-panel" class="turn-by-turn-panel fixed top-5 left-1/2 -translate-x-1/2 bg-gray-800 bg-opacity-80 backdrop-blur-sm px-6 py-3 rounded-lg shadow-lg text-white text-center hidden">
+        <p class="text-lg font-bold" id="turn-instruction">Maintain Course</p>
+        <p class="text-sm text-gray-300" id="turn-distance">Next turn in 100 km</p>
+    </div>
+
+    <!-- TOP-RIGHT NAVIGATION HUD -->
+    <div id="navigation-hud" class="navigation-hud fixed top-5 right-5 bg-gray-800 bg-opacity-80 backdrop-blur-sm p-4 rounded-lg shadow-lg text-white w-72 text-sm hidden">
+        <!-- Animation Progress -->
+        <div id="hud-animation-progress" class="hidden">
+            <h3 class="font-bold mb-2 text-blue-400">Animation Progress</h3>
+            <div class="flex justify-between items-center mb-1">
+                <span class="text-gray-400">Current Speed:</span>
+                <span id="hud-current-speed" class="font-bold">0 kts</span>
+            </div>
+            <div class="flex justify-between items-center mb-1">
+                <span class="text-gray-400">Distance Left:</span>
+                <span id="hud-distance-left" class="font-bold">0 km</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-gray-400">Time Left:</span>
+                <span id="hud-time-left" class="font-bold">0d 0h</span>
+            </div>
+        </div>
+        
+        <!-- Environmental Conditions -->
+        <div id="hud-environmental-conditions" class="mt-4 pt-3 border-t border-gray-600 hidden">
+            <h3 class="font-bold mb-2 text-teal-400">Environmental Conditions</h3>
+            <div class="flex justify-between items-center mb-1">
+                <span class="text-gray-400">Wind:</span>
+                <span id="hud-wind" class="font-bold">1 kts @ 1°</span>
+            </div>
+            <div class="flex justify-between items-center mb-1">
+                <span class="text-gray-400">Current:</span>
+                <span id="hud-current" class="font-bold">1 kts @ 1°</span>
+            </div>
+            <div class="flex justify-between items-center mb-1">
+                <span class="text-gray-400">Waves:</span>
+                <span id="hud-waves" class="font-bold">1 m @ 1°</span>
+            </div>
+            <div class="flex justify-between items-center mb-1">
+                <span class="text-gray-400">Rain:</span>
+                <span id="hud-rain" class="font-bold">1 mm/h (1%)</span>
+            </div>
+            <div class="flex justify-between items-center">
+                <span class="text-gray-400">Sea Depth:</span>
+                <span id="hud-sea-depth" class="font-bold">1 m</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="tooltip" class="hidden"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    <script src='https://unpkg.com/@turf/turf@6/turf.min.js'></script>
+
+    <script src="boat.js"></script>
+    <script src="main.js"></script>
+
+</body>
+</html>
