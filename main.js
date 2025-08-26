@@ -171,8 +171,9 @@ function calculateAndDisplayMetrics(path, speed, totalDistanceKm){
     const totalHours=speedKmh>0?totalDistanceKm/speedKmh:0;
     const days=Math.floor(totalHours/24);
     const remainingHours=Math.round(totalHours%24);
-    // ev note check this 0.0023
-    const carbonTons=totalFuelLiters*0.0023;
+
+    // ev note: formula checked change from 0.0023 to 0.0028 (per latest IMO data)
+    const carbonTons=totalFuelLiters*0.0028 ;
 
     const metricsDisplay=document.getElementById('metrics-display');
     metricsDisplay.innerHTML=`
@@ -186,7 +187,7 @@ function calculateAndDisplayMetrics(path, speed, totalDistanceKm){
 function resetNavigation(showMsg=true){boatAnimator.stopAnimation();currentPath=[];navigationState='SET_START';startPoint=null;endPoint=null;routeLayer.clearLayers();if(startMarker)map.removeLayer(startMarker);if(endMarker)map.removeLayer(endMarker);startMarker=null;endMarker=null;document.getElementById('metrics-display').classList.add('hidden');hideHud();if(showMsg){showMessage('Route cleared. Ready for new route.','blue')}}
 
 
-// what is this ?
+// Heads-Up Display （HUD） -- separate values for environmental conditions
 function updateHud(params, totalDistanceKm) {
     document.getElementById('hud-wind').textContent = `${params.windStrength} kts @ ${params.windDirection}°`;
     document.getElementById('hud-current').textContent = `${params.currentStrength} kts @ ${params.currentDirection}°`;
