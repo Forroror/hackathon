@@ -55,7 +55,7 @@ class AStarPathfinder {
      * @param {object} params - All vessel and environmental parameters.
      * @returns {Array<object>|null} The path with fuel info, or null.
      */
-    findPath(landGrid, startLatLng, endLatLng, params) {
+    findPath(landGrid, startLatLng, endLatLng, params, envCache) {
         const originalStartNode = landGrid.latLngToGrid(startLatLng);
         const originalEndNode = landGrid.latLngToGrid(endLatLng);
 
@@ -95,8 +95,8 @@ class AStarPathfinder {
             aStarEndNode = endWaterInfo.waterNode;
         }
 
-        // Run the main A* algorithm between the water-accessible points
-        const waterPathResult = this.runAStar(aStarStartNode, aStarEndNode, landGrid, params);
+        // Run the main A* algorithm between the water-accessible points(gm)
+        const waterPathResult = this.runAStar(aStarStartNode, aStarEndNode, landGrid, params, envCache);
 
         if (!waterPathResult) {
             console.error("A* failed to find a path between water points.");
@@ -127,7 +127,7 @@ class AStarPathfinder {
         }
         
         // Recalculate total fuel consumption for the entire combined path
-        return this.recalculateTotalFuel(finalPath, landGrid, params);
+        return this.recalculateTotalFuel(finalPath, landGrid, params, envCache);
     }
 
     /**
@@ -138,7 +138,7 @@ class AStarPathfinder {
      * @param {object} params - Vessel and environmental parameters.
      * @returns {object|null} The final node with parent references, or null.
      */
-    runAStar(startNode, endNode, landGrid, params) {
+    runAStar(startNode, endNode, landGrid, params, envCache) { //(gm)
         const openSet = new MinHeap();
         const closedSet = new Set();
         const gScores = new Map(); // gScore is total fuel consumed in Liters
@@ -172,7 +172,7 @@ class AStarPathfinder {
                     continue;
                 }
 
-                const fuelForSegment = this.calculateSegmentCost(currentNode, neighbor, landGrid, params);
+                const fuelForSegment = this.calculateSegmentCost(currentNode, neighbor, landGrid, params, envCache);
                 const gScore = currentNode.g + fuelForSegment;
 
                 if (!gScores.has(neighborKey) || gScore < gScores.get(neighborKey)) {
@@ -260,7 +260,7 @@ class AStarPathfinder {
      * @param {object} params - Vessel and environmental parameters.
      * @returns {Array<object>} The path with updated totalFuel values.
      */
-    recalculateTotalFuel(path, landGrid, params) {
+    recalculateTotalFuel(path, landGrid, params, envCache) {
         if (path.length < 2) return path;
 
         let cumulativeFuel = 0;
@@ -269,7 +269,7 @@ class AStarPathfinder {
         for (let i = 1; i < path.length; i++) {
             const fromNode = landGrid.latLngToGrid(path[i - 1]);
             const toNode = landGrid.latLngToGrid(path[i]);
-            const segmentFuel = this.calculateSegmentCost(fromNode, toNode, landGrid, params);
+            const segmentFuel = this.calculateSegmentCost(fromNode, toNode, landGrid, params, envCache);//(gm)
             cumulativeFuel += segmentFuel;
             path[i].totalFuel = cumulativeFuel;
         }
@@ -278,45 +278,54 @@ class AStarPathfinder {
     }
 
 
-    // The core function for calculating fuel cost with environmental factors
-    calculateSegmentCost(fromNode, toNode, grid, params) {
+    // The core function for calculating fuel cost with environmental factors(gm)
+    calculateSegmentCost(fromNode, toNode, grid, params, envCache) {
         const baseFuelPerKm = this.calculateFuelPerKm(params);
         const distanceKm = this.calculateDistance(fromNode, toNode, grid);
 
-        // If distance is zero, cost is zero
         if (distanceKm === 0) return 0;
+        
+        //Get the environmental data for the current node
+        const { lat, lng } = grid.gridToLatLng(fromNode.x, fromNode.y);
+        const envData = envCache.getData(lat, lng);
+
+        // If data is not available, use a default high cost
+        if (!envData || envData.depth === null) {
+            return baseFuelPerKm * distanceKm * 5; // Penalty for unknown areas
+        }
 
         let costMultiplier = 1.0;
-
-        // --- Directional Factors (Wind, Current, Waves) ---
         const boatBearing = this.calculateBearing(fromNode, toNode, grid);
-        
-        // Wind Effect
-        const windAngleDiff = Math.abs(boatBearing - params.windDirection);
-        const windEffect = params.windStrength * Math.cos(windAngleDiff * Math.PI / 180);
+
+        // 2. Use the live data from envData instead of params
+        // Wind Effect (convert cardinal 0-7 to degrees 0-360)
+        const windDirection = envData.wind_direction_deg;
+        const windAngleDiff = Math.abs(boatBearing - windDirection);
+        const windEffect = envData.wind_speed_mps * Math.cos(windAngleDiff * Math.PI / 180);
         
         // Current Effect
-        const currentAngleDiff = Math.abs(boatBearing - params.currentDirection);
-        const currentEffect = params.currentStrength * Math.cos(currentAngleDiff * Math.PI / 180);
+        const currentDirection = envData.current_direction_deg;;
+        const currentAngleDiff = Math.abs(boatBearing - currentDirection);
+        const currentEffect = envData.current_speed_mps * Math.cos(currentAngleDiff * Math.PI / 180);
 
-        // Wave Effect
-        const waveAngleDiff = Math.abs(boatBearing - params.waveDirection);
-        const waveEffect = params.waveHeight * Math.cos(waveAngleDiff * Math.PI / 180);
+        // Assume waves are always a penalty for simplicity
+        const waveEffect = envData.waves_height_m;
         
         costMultiplier -= (windEffect * 0.1); 
         costMultiplier -= (currentEffect * 0.2);
         costMultiplier += (waveEffect * 0.15);
 
-        // --- Non-Directional Factors ---
-        costMultiplier += (params.rainIntensity * params.rainProbability * 0.05);
+        // Non-Directional Factors
+        costMultiplier += (envData.weekly_precip_mean / 100); // Normalize precipitation
+        costMultiplier += (envData.ice_conc / 100) * 2; // Heavy penalty for ice
 
-        if (params.seaDepth < params.draft * 2) {
+        // Shallow water effect
+        if (envData.depth < params.draft * 2) {
             costMultiplier += 0.3;
         }
 
-        // Penalty for traveling over land (e.g., canals, ports)
         if (grid.grid[toNode.x][toNode.y] === 1) {
-            costMultiplier *= 10; // Make land travel very expensive but possible
+            costMultiplier *= 10;
         }
 
         return baseFuelPerKm * distanceKm * Math.max(0.1, costMultiplier);
@@ -332,7 +341,7 @@ class AStarPathfinder {
         return fuelPerKm;
     }
 
-    heuristic(a, b, grid, params) {
+    heuristic(a, b, grid, params, envCache) {
         const distanceKm = this.calculateDistance(a, b, grid);
         return this.calculateFuelPerKm(params) * distanceKm;
     }

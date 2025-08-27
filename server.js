@@ -10,6 +10,7 @@ const csv = require('csv-parser');
 
 const NavigationGrid = require('./navigation-grid.js');
 const AStarPathfinder = require('./a-star-pathfinder.js');
+const EnvironmentalDataCache = require('./environmental-data-cache.js');
 
 
 const app = express();
@@ -25,7 +26,6 @@ let portData = [];
 function initializeServer() {
     console.log('Server starting up...');
     const landCachePath = path.join(__dirname, './cache/grid-cache.json');
-    const depthCachePath = path.join(__dirname, 'depth-cache.json');
 
     if (fs.existsSync(landCachePath)) {
         console.log('Loading land navigation grid from cache...');
@@ -66,23 +66,18 @@ app.get('/api/ports', (req, res) => {
     else res.status(503).json({ error: 'Port data is not ready or failed to load.' });
 });
 
-app.get('/api/route', (req, res) => {
+app.get('/api/route', async (req, res) => {
     if (!landGrid) {
         return res.status(503).json({ error: 'Pathfinder is not ready yet.' });
     }
     
-    // UPDATED: Accept all new environmental parameters
-    // ev new : adding shipLength, beam, hullType to req.query
+    // UPDATED: Accept all new vessel parameters
     const { 
-        start, end,shipLength,beam,hullType ,
-        speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S,
-        rainProbability, rainIntensity, seaDepth, windStrength, windDirection,
-        currentStrength, currentDirection, waveHeight, waveDirection
+        start, end, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S,voyageDate
     } = req.query;
 
-    // UPDATED: Validation check for all parameters
-    // ev new : adding shipLength, beam, hullType to requiredParams
-    const requiredParams = { start, end,shipLength,beam,hullType, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, rainProbability, rainIntensity, seaDepth, windStrength, windDirection, currentStrength, currentDirection, waveHeight, waveDirection };
+    // UPDATED: Validation check for all vessel parameters & voyageDate
+    const requiredParams = { start, end, speed, draft, hpReq, fuelRate, k, baseWeight, load, F, S, voyageDate};
     for (const param in requiredParams) {
         if (!requiredParams[param]) {
             return res.status(400).json({ error: `Missing required parameter: ${param}.` });
@@ -92,31 +87,40 @@ app.get('/api/route', (req, res) => {
     try {
         const startCoords = start.split(',').map(Number);
         const endCoords = end.split(',').map(Number);
-        
+        const envCache = new EnvironmentalDataCache(
+            { lat: startCoords[0], lng: startCoords[1] },
+            { lat: endCoords[0], lng: endCoords[1] },
+            landGrid, // Use the existing landGrid
+            voyageDate
+        );
+        // Load the data from the Python server
+        const cacheInitialized = await envCache.initialize();
+        if (!cacheInitialized) {
+            // If the cache fails, stop the request.
+            return res.status(500).json({ error: "Failed to initialize environmental data cache. Is the Python server running?" });
+        }
         const pathfinder = new AStarPathfinder();
 
         // UPDATED: Pass all parameters to the pathfinder
-        // ev new : adding shipLength, beam, hullType to params
         const params = {
-            shipLength: parseFloat(shipLength), beam: parseFloat(beam), hullType: hullType,
             speed: parseFloat(speed), draft: parseFloat(draft), hpReq: parseFloat(hpReq),
             fuelRate: parseFloat(fuelRate), k: parseFloat(k), baseWeight: parseFloat(baseWeight),
-            load: parseFloat(load), F: parseFloat(F), S: parseFloat(S),
-            rainProbability: parseFloat(rainProbability), rainIntensity: parseFloat(rainIntensity),
+            load: parseFloat(load), F: parseFloat(F), S: parseFloat(S)
+        };
+            /**rainProbability: parseFloat(rainProbability), rainIntensity: parseFloat(rainIntensity),
             seaDepth: parseFloat(seaDepth), windStrength: parseFloat(windStrength),
             windDirection: parseFloat(windDirection), currentStrength: parseFloat(currentStrength),
             currentDirection: parseFloat(currentDirection), waveHeight: parseFloat(waveHeight),
-            waveDirection: parseFloat(waveDirection)
-        };
-
+            waveDirection: parseFloat(waveDirection)**/
         const path = pathfinder.findPath(
             landGrid,
             { lat: startCoords[0], lng: startCoords[1] },
             { lat: endCoords[0], lng: endCoords[1] },
-            params
+            params,
+            envCache
         );
         
-        res.json(path || []);
+        res.json({ path: path || [], envData: envCache.data });//return env_data for UHD and boat(gm)
     } catch (error) {
         console.error("Error during pathfinding:", error);
         res.status(500).json({ error: "An error occurred during pathfinding." });
@@ -144,24 +148,6 @@ app.post('/api/grid/update', (req, res) => {
         res.status(500).json({ error: 'Failed to save grid updates.' });
     }
 });
-
-
-
-app.get("/api/depth", async (req, res) => {
-    const startLatLng = { lat: parseFloat(req.query.startLat), lng: parseFloat(req.query.startLon) };
-    const endLatLng = { lat: parseFloat(req.query.endLat), lng: parseFloat(req.query.endLon) };
-
-    const params = {}; // add your params if needed
-
-    try {
-        const result = await pathfinder.findPath({}, startLatLng, endLatLng, params);
-        res.json({ path: result });
-    } catch (err) {
-        res.status(500).json({ error: err.toString() });
-    }
-});
-
-
 
 app.listen(port, () => {
     initializeServer();

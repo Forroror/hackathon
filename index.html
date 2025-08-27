@@ -84,6 +84,10 @@
             <div class="space-y-3 text-sm">
                 <!-- Vessel Specs and Environmental Factors inputs remain here -->
                  <p class="font-semibold text-gray-400">Vessel Specs</p>
+                <div class="control-item">
+                    <label for="voyageDate">Voyage Start Date:</label>
+                    <input type="date" id="voyageDate">
+                </div>
                 <div class="flex justify-between items-center">
                     <label for="shipType" class="info-label" data-tooltip="Select a vessel type to load its typical parameters.">Ship Type</label>
                     <select id="shipType" class="w-32 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
@@ -95,28 +99,6 @@
                         <option value="cruise_ship">Cruise Ship</option>
                     </select>
                 </div>
-                
-                <!-- ev new -->
-                <!-- add new user input Length, Beam, Hull Type for coeffs -->
-
-                <div class="flex justify-between items-center">
-                    <label for="shipLength" class="info-label" data-tooltip="The ship's length in meters.">Ship Length (meters)</label>
-                    <input type="number" id="shipLength" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
-                </div>
-                <div class="flex justify-between items-center">
-                    <label for="beam" class="info-label" data-tooltip="The ship's beam in meters.">Beam (meters)</label>
-                    <input type="number" id="beam" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
-                </div>
-                <div class="flex justify-between items-center">
-                    <label for="hullType" class="info-label" data-tooltip="Select ship's hull type.">Hull Type</label>
-                    <select id="hullType" class="w-32 bg-gray-700 border-gray-600 rounded-md py-1 px-2">
-                        <option value="displacement">Displacement</option>
-                        <option value="semi-displacement">Semi-Displacement</option>
-                        <option value="planing">Planing</option>
-                    </select>>
-                </div>
-
-                <!-- ev new -->
                 <div class="flex justify-between items-center">
                     <label for="baseWeight" class="info-label" data-tooltip="The ship's empty weight (displacement) in tons.">Base Weight (tons)</label>
                     <input type="number" id="baseWeight" min="0" max="500000" class="w-24 bg-gray-700 border-gray-600 rounded-md py-1 px-2">

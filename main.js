@@ -26,18 +26,18 @@ let heatLayer = null;
 let isHeatmapVisible = false;
 let depthDataCache = null;
 let portData = [];
+let useCustomGrid = false; //use uploaded grid
+let envDataCache = null; //fetch envdata for UHD and boat
+
 
 // --- Ship Type Presets ---
-
-// ev new 
-// adding defaults value for shipLength,beam,hullType
 const shipTypeDefaults = {
-    fishing_trawler: { shipLength:35 ,beam:8 , hullType: "displacement",baseWeight: 1500, load: 500, speed: 10, draft: 5, hpReq: 2000, fuelRate: 0.22 },
-    handysize_bulk: { shipLength:130 ,beam:20 , hullType: "displacement",baseWeight: 20000, load: 35000, speed: 14, draft: 10, hpReq: 8000, fuelRate: 0.20 },
-    panamax_container: { shipLength:280 ,beam:30 , hullType: "displacement",baseWeight: 40000, load: 50000, speed: 20, draft: 12, hpReq: 40000, fuelRate: 0.19 },
-    aframax_tanker: { shipLength:200 ,beam:30 , hullType: "displacement",baseWeight: 55000, load: 100000, speed: 15, draft: 14, hpReq: 18000, fuelRate: 0.18 },
-    vlcc_tanker: { shipLength:300 ,beam:58 , hullType: "displacement",baseWeight: 120000, load: 300000, speed: 16, draft: 20, hpReq: 30000, fuelRate: 0.18 },
-    cruise_ship: { shipLength:365 ,beam:65 , hullType: "displacement",baseWeight: 100000, load: 20000, speed: 22, draft: 8, hpReq: 90000, fuelRate: 0.21 }
+    fishing_trawler: { baseWeight: 1500, load: 500, speed: 10, draft: 5, hpReq: 2000, fuelRate: 0.22 },
+    handysize_bulk: { baseWeight: 20000, load: 35000, speed: 14, draft: 10, hpReq: 8000, fuelRate: 0.2 },
+    panamax_container: { baseWeight: 40000, load: 50000, speed: 20, draft: 12, hpReq: 40000, fuelRate: 0.19 },
+    aframax_tanker: { baseWeight: 55000, load: 100000, speed: 15, draft: 14, hpReq: 18000, fuelRate: 0.18 },
+    vlcc_tanker: { baseWeight: 120000, load: 300000, speed: 16, draft: 20, hpReq: 30000, fuelRate: 0.18 },
+    cruise_ship: { baseWeight: 100000, load: 20000, speed: 22, draft: 8, hpReq: 90000, fuelRate: 0.21 }
 };
 
 // --- MAP SETUP ---
@@ -70,9 +70,7 @@ function initializeApp() {
 // --- Port Search, Ship Presets, and Tooltips ---
 function loadPortData(){fetch('/api/ports').then(response=>{if(!response.ok)throw new Error('Failed to load port data');return response.json()}).then(data=>{portData=data;const portsList=document.getElementById('ports-list');if(portsList){portsList.innerHTML=portData.map(port=>`<option value="${port.name}"></option>`).join('')}showMessage('Port data loaded.','green')}).catch(error=>{console.error('Error fetching port data:',error);showMessage('Could not load port data from server.','red')})}
 function setupSearchListeners(){const startInput=document.getElementById('startPort');const endInput=document.getElementById('endPort');const handleSelection=()=>{resetNavigation(false);const startValue=startInput.value;const endValue=endInput.value;const startPort=portData.find(p=>p.name===startValue);const endPort=portData.find(p=>p.name===endValue);if(startMarker)map.removeLayer(startMarker);if(endMarker)map.removeLayer(endMarker);if(startPort){startPoint=L.latLng(startPort.lat,startPort.lng);startMarker=L.circleMarker(startPoint,{color:'#10b981',radius:8,fillOpacity:0.8}).addTo(map)}if(endPort){endPoint=L.latLng(endPort.lat,endPort.lng);endMarker=L.circleMarker(endPoint,{color:'#ef4444',radius:8,fillOpacity:0.8}).addTo(map)}if(startPort&&endPort){const bounds=L.latLngBounds([startPoint,endPoint]);map.fitBounds(bounds.pad(0.2));calculateAndFetchRoute(startPoint,endPoint)}};startInput.addEventListener('change',handleSelection);endInput.addEventListener('change',handleSelection)}
-// ev new 
-// adding shipLength,beam,hullType to updateShipParameters function
-function updateShipParameters(){const selectedType=document.getElementById('shipType').value;const defaults=shipTypeDefaults[selectedType];if(defaults){document.getElementById('shipLength').value=defaults.shipLength; document.getElementById('beam').value=defaults.beam;document.getElementById('hullType').value=defaults.hullType;document.getElementById('baseWeight').value=defaults.baseWeight;document.getElementById('load').value=defaults.load;document.getElementById('shipSpeed').value=defaults.speed;document.getElementById('shipDraft').value=defaults.draft;document.getElementById('hpReq').value=defaults.hpReq;document.getElementById('fuelRate').value=defaults.fuelRate}}
+function updateShipParameters(){const selectedType=document.getElementById('shipType').value;const defaults=shipTypeDefaults[selectedType];if(defaults){document.getElementById('baseWeight').value=defaults.baseWeight;document.getElementById('load').value=defaults.load;document.getElementById('shipSpeed').value=defaults.speed;document.getElementById('shipDraft').value=defaults.draft;document.getElementById('hpReq').value=defaults.hpReq;document.getElementById('fuelRate').value=defaults.fuelRate}}
 function initializeTooltips(){const labels=document.querySelectorAll('.info-label');const tooltip=document.getElementById('tooltip');labels.forEach(label=>{label.addEventListener('mouseenter',e=>{tooltip.textContent=e.target.dataset.tooltip;tooltip.style.opacity='1';tooltip.style.display='block'});label.addEventListener('mousemove',e=>{tooltip.style.left=`${e.clientX+15}px`;tooltip.style.top=`${e.clientY+15}px`});label.addEventListener('mouseleave',()=>{tooltip.style.opacity='0';setTimeout(()=>{if(tooltip.style.opacity==='0')tooltip.style.display='none'},200)})})}
 
 // --- NAVIGATION & ROUTING LOGIC ---
@@ -83,22 +81,16 @@ function calculateAndFetchRoute(start, end) {
     showMessage('Calculating route...', 'blue');
     navigationState = 'CALCULATING';
     
-    
     const params = {
-        //ev new
-        //adding shipLength,beam,hullType to params
-        shipLength: document.getElementById('shipLength').value, beam: document.getElementById('beam').value, hullType: document.getElementById('hullType').value,
         speed: document.getElementById('shipSpeed').value, draft: document.getElementById('shipDraft').value,
         hpReq: document.getElementById('hpReq').value, fuelRate: document.getElementById('fuelRate').value,
         k: document.getElementById('hullFactor').value, baseWeight: document.getElementById('baseWeight').value,
         load: document.getElementById('load').value, F: document.getElementById('foulingFactor').value,
-        S: document.getElementById('seaStateFactor').value, 
-        
-        // setting all environmental parameters to default 1 for now
-        rainProbability: 1, rainIntensity: 1,
-        seaDepth: 100, windStrength: 1, windDirection: 1, currentStrength: 1,
-        currentDirection: 1, waveHeight: 1, waveDirection: 1
+        S: document.getElementById('seaStateFactor').value
     };
+
+    // Get the date from the new input field
+    const voyageDate = document.getElementById('voyageDate').value;
 
     for (const key in params) {
         if (!params[key] && params[key] !== 0) {
@@ -108,41 +100,59 @@ function calculateAndFetchRoute(start, end) {
         }
     }
 
+    if (!voyageDate) {
+    showMessage('Please select a voyage start date.', 'red');
+    navigationState = 'SET_END'; // Reset state so they can try again
+    return;
+    }
+
     const startCoords = `${start.lat},${start.lng}`;
     const endCoords = `${end.lat},${end.lng}`;
-    const queryString = `start=${startCoords}&end=${endCoords}&` + 
-                        Object.entries(params).map(([key, value]) => `${key}=${value}`).join('&');
-
+    let queryString = `start=${startCoords}&end=${endCoords}&` + Object.entries(params).map(([key, value]) => `${key}=${value}`).join('&') +`&voyageDate=${voyageDate}`;
+    if (useCustomGrid) {
+        queryString += '&useTemporaryGrid=true';//set the useTemporaryGrid to true (gm)
+    
+    }
     fetch(`/api/route?${queryString}`)
         .then(response => {
             if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
             return response.json();
         })
-        .then(path => {
-            currentPath = path;
-            if (path && path.length > 0) {
-                drawMultiColorPath(path);
-                // FIX: Calculate total distance ONCE and pass it to both functions
-                const totalDistanceKm = calculateTotalDistance(path);
-                calculateAndDisplayMetrics(path, params.speed, totalDistanceKm);
-                updateHud(params, totalDistanceKm); // Pass distance to HUD
-                
+
+        //use envdata for UHD and boat (gm)
+        .then(data => { // The parameter is now 'data'
+            // Unpack the data object
+            currentPath = data.path;
+            envDataCache = data.envData; // Store the environmental data
+
+            //The rest of the logic uses 'currentPath' instead of 'path'
+            if (currentPath && currentPath.length > 0) {
+                drawMultiColorPath(currentPath);
+                const totalDistanceKm = calculateTotalDistance(currentPath);
+                calculateAndDisplayMetrics(currentPath, params.speed, totalDistanceKm);
+                updateHud(params, totalDistanceKm);
                 navigationState = 'ROUTE_DISPLAYED';
                 showMessage('Route found.', 'green');
 
                 if (isAnimationEnabled) {
-                    boatAnimator.startAnimation(path, params, totalDistanceKm);
+                    // Pass the new envDataCache to the animation
+                    boatAnimator.startAnimation(currentPath, params, envDataCache, totalDistanceKm);
                 }
             } else {
                 currentPath = [];
                 showMessage('No valid route found.', 'red');
                 navigationState = 'SET_START';
             }
-        }).catch(error => {
-            currentPath = [];
-            console.error('Error fetching route:', error);
-            showMessage('Could not connect to the routing server.', 'red');
-            navigationState = 'SET_START';
+        })
+        .catch(error => {
+            if (error.name === 'AbortError') {
+                //when cancel route.
+                console.log('Route calculation was cancelled.');
+            } else {
+                //For any other errors.
+                console.error('Fetch error:', error);
+                showMessage('Failed to fetch route from server.', 'red');
+            }
         });
 }
 
@@ -166,15 +176,11 @@ function calculateTotalDistance(path) {
 function calculateAndDisplayMetrics(path, speed, totalDistanceKm){
     const totalFuelLiters=path[path.length-1].totalFuel;
     if(totalFuelLiters===undefined){console.error("Path data does not include totalFuel.");return}
-
     const speedKmh=speed*1.852;
     const totalHours=speedKmh>0?totalDistanceKm/speedKmh:0;
     const days=Math.floor(totalHours/24);
     const remainingHours=Math.round(totalHours%24);
-
-    // ev note: formula checked change from 0.0023 to 0.0028 (per latest IMO data)
-    const carbonTons=totalFuelLiters*0.0028 ;
-
+    const carbonTons=totalFuelLiters*0.0023;
     const metricsDisplay=document.getElementById('metrics-display');
     metricsDisplay.innerHTML=`
         <div class="flex justify-between items-center mb-2"><span class="text-gray-400">Travel Time:</span><span class="font-bold text-blue-400">${days}d ${remainingHours}h</span></div>
@@ -186,8 +192,6 @@ function calculateAndDisplayMetrics(path, speed, totalDistanceKm){
 
 function resetNavigation(showMsg=true){boatAnimator.stopAnimation();currentPath=[];navigationState='SET_START';startPoint=null;endPoint=null;routeLayer.clearLayers();if(startMarker)map.removeLayer(startMarker);if(endMarker)map.removeLayer(endMarker);startMarker=null;endMarker=null;document.getElementById('metrics-display').classList.add('hidden');hideHud();if(showMsg){showMessage('Route cleared. Ready for new route.','blue')}}
 
-
-// Heads-Up Display （HUD） -- separate values for environmental conditions
 function updateHud(params, totalDistanceKm) {
     document.getElementById('hud-wind').textContent = `${params.windStrength} kts @ ${params.windDirection}°`;
     document.getElementById('hud-current').textContent = `${params.currentStrength} kts @ ${params.currentDirection}°`;
@@ -212,7 +216,61 @@ function toggleEditMode(){editMode=!editMode;const editButton=document.getElemen
 function editGridCell(e){if(!gridDataCache)return;const{grid,bounds,resolution}=gridDataCache;const i=Math.floor((e.latlng.lng-bounds.west)/resolution);const j=Math.floor((e.latlng.lat-bounds.south)/resolution);if(grid[i]&&grid[i][j]!==undefined){const targetValue=drawMode==="draw"?1:0;if(grid[i][j]!==targetValue){grid[i][j]=targetValue;drawGrid()}}}
 function saveGrid(){if(!gridDataCache){showMessage("No grid data to save.","red");return}showMessage("Saving a new copy of the grid to the server...","yellow");fetch("/api/grid/update",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(gridDataCache)}).then(response=>response.json()).then(data=>{showMessage(`${data.message} Filename: ${data.filename}`,"green")}).catch(error=>{console.error("Error saving grid:",error);showMessage("Failed to save grid.","red")})}
 function downloadGrid(){if(!gridDataCache){showMessage("No grid data to download.","red");return}showMessage("Preparing download...","blue");const dataStr="data:text/json;charset=utf-8,"+encodeURIComponent(JSON.stringify(gridDataCache));const downloadAnchorNode=document.createElement("a");downloadAnchorNode.setAttribute("href",dataStr);downloadAnchorNode.setAttribute("download",`edited-grid-cache-${Date.now()}.json`);document.body.appendChild(downloadAnchorNode);downloadAnchorNode.click();downloadAnchorNode.remove();showMessage("Download started.","green")}
-function uploadGrid(){const fileInput=document.createElement("input");fileInput.type="file";fileInput.accept=".json";fileInput.onchange=e=>{const file=e.target.files[0];if(!file)return;showMessage(`Reading ${file.name}...`,"blue");const reader=new FileReader;reader.onload=event=>{try{const uploadedData=JSON.parse(event.target.result);if(uploadedData.grid&&uploadedData.bounds&&uploadedData.hasOwnProperty("resolution")){gridDataCache=uploadedData;showMessage("Custom grid loaded successfully!","green");if(isGridVisible){drawGrid()}}else{showMessage("Invalid grid file format.","red")}}catch(error){console.error("Error parsing JSON file:",error);showMessage("Could not read the uploaded file.","red")}};reader.readAsText(file)};fileInput.click()}
+//uploaded grid fetch to server, so can be used by A* (gm) 
+function uploadGrid() {
+    const fileInput = document.createElement("input");
+    fileInput.type = "file";
+    fileInput.accept = ".json";
+
+    fileInput.onchange = e => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        showMessage(`Reading ${file.name}...`, "blue");
+        const reader = new FileReader;
+
+        reader.onload = event => {
+            try {
+                const uploadedData = JSON.parse(event.target.result);
+
+                if (uploadedData.grid && uploadedData.bounds && uploadedData.hasOwnProperty("resolution")) {
+                    // This block runs if the file is a valid grid
+                    gridDataCache = uploadedData;
+                    showMessage("Custom grid loaded locally! Sending to server...", "yellow");
+                    if (isGridVisible) {
+                        drawGrid()
+                    }
+
+                    // Send the new validated grid data to the new server endpoint
+                    fetch('/api/grid/temporary-upload', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(uploadedData)
+                    })
+                    .then(response => {
+                        if (!response.ok) throw new Error('Server rejected the grid.');
+                        return response.json();
+                    })
+                    .then(data => {
+                        useCustomGrid = true;
+                        showMessage('Custom grid will be used for the next route calculation.', 'green');
+                    })
+                    .catch(error => {
+                        console.error('Error sending grid to server:', error);
+                        showMessage('Failed to send custom grid to server.', 'red');
+                    });
+                } else {
+                    showMessage("Invalid grid file format.", "red")
+                }
+            } catch (error) {
+                console.error("Error parsing JSON file:", error);
+                showMessage("Could not read the uploaded file.", "red")
+            }
+        };
+        reader.readAsText(file)
+    };
+    fileInput.click()
+}
 
 function toggleBoatAnimation() {
     isAnimationEnabled = !isAnimationEnabled;
@@ -223,14 +281,12 @@ function toggleBoatAnimation() {
         if (navigationState === 'ROUTE_DISPLAYED' && currentPath && currentPath.length > 0) {
             const params = { 
                 speed: document.getElementById('shipSpeed').value,
-
-                // set temporary value for windStrength etc
                 windStrength: 1, windDirection: 1,
                 currentStrength: 1, currentDirection: 1
             };
             // FIX: Pass the pre-calculated total distance to the animator
             const totalDistanceKm = calculateTotalDistance(currentPath);
-            boatAnimator.startAnimation(currentPath, params, totalDistanceKm);
+            boatAnimator.startAnimation(currentPath, params, envDataCache, totalDistanceKm);
             document.getElementById('hud-environmental-conditions').style.display = 'block';
             document.getElementById('navigation-hud').style.display = 'block';
         }

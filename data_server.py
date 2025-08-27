@@ -1,124 +1,127 @@
-#!/usr/bin/env python3
-"""
-data_server.py
+# data_server.py
+# A high-performance FastAPI server to provide environmental data.
 
-A lightweight Flask-based API server to serve data slices from NetCDF files on demand.
-This is extremely memory-efficient as it only reads the required data from disk
-for each request, never loading the entire files into memory.
-
-Requirements:
-    pip install flask xarray netcdf4 pandas
-
-Usage:
-    python3 data_server.py
-"""
-
-from flask import Flask, request, jsonify
-import xarray as xr
-import os
+import sys
+from fastapi import FastAPI
+from pydantic import BaseModel, Field
+import netCDF4
 import numpy as np
-import pandas as pd
-
-app = Flask(__name__)
+from datetime import datetime, timedelta
+import os
+from contextlib import asynccontextmanager
 
 # --- Configuration ---
-# This must point to your folder of regridded, aligned NetCDF files.
-NC_DATA_DIR = 'nc_data_regridded' 
-datasets = {}
+BASE_NC_PATH = "nc_data"
 
-def load_datasets():
-    """Loads references to all NetCDF files without loading data into memory."""
-    print("Loading dataset references...")
-    file_map = {
-        'wind_asc': 'wind_asc.nc',
-        'wind_dsc': 'wind_dsc.nc',
-        'current': 'current.nc',
-        'waves': 'waves.nc',
-        'rain': 'rain.nc',
-        'ice': 'ice.nc'
-    }
-    for key, filename in file_map.items():
-        path = os.path.join(NC_DATA_DIR, filename)
-        if os.path.exists(path):
-            # chunks={} prevents xarray from loading data into memory immediately
-            datasets[key] = xr.open_dataset(path, chunks={})
-            print(f"  -> Opened reference to {filename}")
-        else:
-            print(f"  -> WARNING: File not found for '{key}' at {path}")
-    print("Dataset references loaded.")
+# --- FastAPI App Initialization ---
+app = FastAPI()
+data_cache = { "nc_files": {} }
 
-def cardinal_to_angle_rad(cardinal):
-    angle_deg = 90 - (cardinal * 45)
-    return np.deg2rad(angle_deg)
+# --- Data Models ---
+class GridDataRequest(BaseModel):
+    # This is the corrected model
+    min_lat: float 
+    min_lon: float
+    max_lat: float
+    max_lon: float
+    date: str
+# --- Lifespan Management ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    print("--- FastAPI server starting up: Loading NetCDF files... ---")
+    nc_filenames = ["wind_asc.nc", "wind_dsc.nc", "current.nc", "waves.nc", "rain.nc", "ice.nc", "sea_depth.nc"]
+    for filename in nc_filenames:
+        try:
+            path = os.path.join(BASE_NC_PATH, filename)
+            data_cache["nc_files"][filename] = netCDF4.Dataset(path, 'r')
+            print(f"  - Successfully loaded and cached: {path}")
+        except Exception as e:
+            print(f"  - WARNING: Could not load {filename}. Error: {e}")
+    print("--- Data loading complete. Server is ready. ---")
+    yield
+    print("--- Closing all open data files... ---")
+    for handler in data_cache["nc_files"].values(): handler.close()
+    print("--- Server shut down. ---")
 
-def angle_rad_to_cardinal(angle_rad):
-    angle_deg = np.rad2deg(angle_rad)
-    angle_deg = (angle_deg % 360 + 360) % 360
-    cardinal_float = (90 - angle_deg) / 45
-    return np.round((cardinal_float % 8 + 8) % 8).astype(int)
+app.router.lifespan_context = lifespan
 
-@app.route('/get_data', methods=['GET'])
-def get_data():
-    """API endpoint to get environmental data for a specific point in space and time."""
+# --- API Endpoint ---
+@app.post("/get-data-grid/")
+async def get_data_grid(request: GridDataRequest):
+    response_data = {}
     try:
-        lat = float(request.args.get('lat'))
-        lon = float(request.args.get('lon'))
-        time_ms_str = request.args.get('time')
+        voyage_date = datetime.fromisoformat(request.date.replace('Z', '+00:00'))
+        days_since_sunday = (voyage_date.weekday() + 1) % 7
+        target_date = voyage_date - timedelta(days=days_since_sunday)
 
-        # --- FIX: Robustly handle potential 'NaN' or invalid time values ---
-        if not time_ms_str or time_ms_str == 'NaN':
-            raise ValueError("Invalid time value received.")
-        
-        time_ms = int(float(time_ms_str))
-        time_dt = pd.to_datetime(time_ms, unit='ms')
+        lon_crosses_dateline = request.min_lon > request.max_lon
 
-        # --- Wind Data (Vector Average) ---
-        ds_asc = datasets.get('wind_asc')
-        ds_dsc = datasets.get('wind_dsc')
-        
-        data_asc = ds_asc.sel(lat=lat, lon=lon, time=time_dt, method='nearest')
-        data_dsc = ds_dsc.sel(lat=lat, lon=lon, time=time_dt, method='nearest')
+        for nc_name, nc_handler in data_cache["nc_files"].items():
+            lat_var = nc_handler.variables.get('lat') or nc_handler.variables.get('latitude')
+            lon_var = nc_handler.variables.get('lon') or nc_handler.variables.get('longitude')
+            
+            lat_indices = np.where((lat_var[:] >= request.min_lat) & (lat_var[:] <= request.max_lat))[0]
+            if len(lat_indices) == 0: continue
+            lat_slice = slice(lat_indices.min(), lat_indices.max() + 1)
+            
+            if 'lats' not in response_data:
+                response_data['lats'] = lat_var[lat_slice].tolist()
 
-        speed_asc = data_asc['wind_speed_mps_asc'].item(0)
-        card_asc = data_asc['wind_cardinal_asc'].item(0)
-        speed_dsc = data_dsc['wind_speed_mps_dsc'].item(0)
-        card_dsc = data_dsc['wind_cardinal_dsc'].item(0)
-        
-        angle_asc = cardinal_to_angle_rad(card_asc)
-        angle_dsc = cardinal_to_angle_rad(card_dsc)
-        x_asc = speed_asc * np.cos(angle_asc)
-        y_asc = speed_asc * np.sin(angle_asc)
-        x_dsc = speed_dsc * np.cos(angle_dsc)
-        y_dsc = speed_dsc * np.sin(angle_dsc)
-        x_avg = (x_asc + x_dsc) / 2
-        y_avg = (y_asc + y_dsc) / 2
-        final_wind_speed = np.sqrt(x_avg**2 + y_avg**2)
-        final_angle = np.arctan2(y_avg, x_avg)
-        final_wind_cardinal = angle_rad_to_cardinal(final_angle)
+            if lon_crosses_dateline:
+                lon_indices1 = np.where(lon_var[:] >= request.min_lon)[0]
+                lon_indices2 = np.where(lon_var[:] <= request.max_lon)[0]
+                lon_indices = np.concatenate([lon_indices1, lon_indices2])
+            else:
+                lon_indices = np.where((lon_var[:] >= request.min_lon) & (lon_var[:] <= request.max_lon))[0]
+            
+            if len(lon_indices) == 0: continue
+            
+            if 'lons' not in response_data:
+                if lon_crosses_dateline:
+                     response_data['lons'] = np.concatenate([lon_var[lon_indices1], lon_var[lon_indices2]]).tolist()
+                else:
+                    lon_slice = slice(lon_indices.min(), lon_indices.max() + 1)
+                    response_data['lons'] = lon_var[lon_slice].tolist()
 
-        # --- Other Data ---
-        env_data = {
-            'wind_speed_mps': final_wind_speed,
-            'wind_cardinal': final_wind_cardinal,
-            'current_speed_mps': datasets['current']['current_speed_mps'].sel(lat=lat, lon=lon, time=time_dt, method='nearest').item(0),
-            'current_cardinal': datasets['current']['current_cardinal'].sel(lat=lat, lon=lon, time=time_dt, method='nearest').item(0),
-            'waves_height_m': datasets['waves']['waves_height'].sel(lat=lat, lon=lon, time=time_dt, method='nearest').item(0),
-            'weekly_precip_mean': datasets['rain']['precipitation'].sel(lat=lat, lon=lon, time=time_dt, method='nearest').item(0),
-            'ice_conc': datasets['ice']['ice_conc'].sel(lat=lat, lon=lon, time=time_dt, method='nearest').item(0)
-        }
-        
-        # Replace any NaN values with 0 for safety
-        for key, value in env_data.items():
-            if np.isnan(value):
-                env_data[key] = 0
+            time_idx = 0
+            if 'time' in nc_handler.variables:
+                time_var = nc_handler.variables['time']
+                time_dates = netCDF4.num2date(time_var[:], time_var.units, calendar=getattr(time_var, 'calendar', 'standard'), only_use_cftime_datetimes=False, only_use_python_datetimes=True)
+                time_diffs = np.array([abs(d.replace(tzinfo=None) - target_date.replace(tzinfo=None)) for d in time_dates])
+                time_idx = time_diffs.argmin()
 
-        return jsonify(env_data)
+            for var_name in nc_handler.variables:
+                if var_name in ['lat', 'lon', 'latitude', 'longitude', 'time']: continue
+                
+                variable = nc_handler.variables[var_name]
+                data_slice = None
 
+                if variable.ndim == 3: # (time, lat, lon)
+                    if lon_crosses_dateline:
+                        data1 = variable[time_idx, lat_slice, lon_indices1]; data2 = variable[time_idx, lat_slice, lon_indices2]
+                        data_slice = np.concatenate([data1, data2], axis=1)
+                    else:
+                        lon_slice = slice(lon_indices.min(), lon_indices.max() + 1)
+                        data_slice = variable[time_idx, lat_slice, lon_slice]
+                elif variable.ndim == 2: # (lat, lon)
+                    if lon_crosses_dateline:
+                        data1 = variable[lat_slice, lon_indices1]; data2 = variable[lat_slice, lon_indices2]
+                        data_slice = np.concatenate([data1, data2], axis=1)
+                    else:
+                        lon_slice = slice(lon_indices.min(), lon_indices.max() + 1)
+                        data_slice = variable[lat_slice, lon_slice]
+
+                if data_slice is not None:
+                    if var_name == 'elevation':
+                        data_slice[data_slice > 0] = 0; data_slice *= -1
+                        var_name = 'depth'
+                    
+                    # Fill masked data with -9999 as expected by the new cache
+                    if np.ma.is_masked(data_slice):
+                        data_slice = data_slice.filled(-9999)
+
+                    response_data[var_name] = data_slice.tolist()
     except Exception as e:
-        print(f"Error in /get_data: {e}")
-        return jsonify({"error": str(e)}), 500
-
-if __name__ == '__main__':
-    load_datasets()
-    # Runs on localhost, port 5000
-    app.run(debug=False, port=5000)
+        print(f"Error processing grid request: {e}", file=sys.stderr)
+        return {"error": str(e)}
+    return response_data
