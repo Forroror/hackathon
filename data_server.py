@@ -124,4 +124,5 @@ async def get_data_grid(request: GridDataRequest):
     except Exception as e:
         print(f"Error processing grid request: {e}", file=sys.stderr)
         return {"error": str(e)}
+    print(f"DEBUG: Returning response with keys: {list(response_data.keys())}")
     return response_data

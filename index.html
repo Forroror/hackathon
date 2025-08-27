@@ -22,6 +22,7 @@
         .custom-control { transition: all 0.3s ease; }
         .custom-control:hover { transform: scale(1.05); box-shadow: 0 4px 15px rgba(0,0,0,0.2); }
         .info-label { cursor: help; border-bottom: 1px dotted #9ca3af; }
+        input[type="date"]::-webkit-calendar-picker-indicator {filter: invert(1);}
         #tooltip {
             position: fixed;
             background-color: #1f2937;
@@ -84,9 +85,10 @@
             <div class="space-y-3 text-sm">
                 <!-- Vessel Specs and Environmental Factors inputs remain here -->
                  <p class="font-semibold text-gray-400">Vessel Specs</p>
-                <div class="control-item">
+                <!--voyageDate-->
+                <div class="flex justify-between items-center">
                     <label for="voyageDate">Voyage Start Date:</label>
-                    <input type="date" id="voyageDate">
+                    <input type="date" id="voyageDate" class="w-32 bg-gray-700 border-gray-600 rounded-md py-1 px-2 text-white">
                 </div>
                 <div class="flex justify-between items-center">
                     <label for="shipType" class="info-label" data-tooltip="Select a vessel type to load its typical parameters.">Ship Type</label>
@@ -184,14 +186,6 @@
             <div class="flex justify-between items-center mb-1">
                 <span class="text-gray-400">Waves:</span>
                 <span id="hud-waves" class="font-bold">1 m @ 1°</span>
-            </div>
-            <div class="flex justify-between items-center mb-1">
-                <span class="text-gray-400">Rain:</span>
-                <span id="hud-rain" class="font-bold">1 mm/h (1%)</span>
-            </div>
-            <div class="flex justify-between items-center">
-                <span class="text-gray-400">Sea Depth:</span>
-                <span id="hud-sea-depth" class="font-bold">1 m</span>
             </div>
         </div>
     </div>

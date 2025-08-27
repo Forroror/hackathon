@@ -73,7 +73,6 @@ function setupSearchListeners(){const startInput=document.getElementById('startP
 function updateShipParameters(){const selectedType=document.getElementById('shipType').value;const defaults=shipTypeDefaults[selectedType];if(defaults){document.getElementById('baseWeight').value=defaults.baseWeight;document.getElementById('load').value=defaults.load;document.getElementById('shipSpeed').value=defaults.speed;document.getElementById('shipDraft').value=defaults.draft;document.getElementById('hpReq').value=defaults.hpReq;document.getElementById('fuelRate').value=defaults.fuelRate}}
 function initializeTooltips(){const labels=document.querySelectorAll('.info-label');const tooltip=document.getElementById('tooltip');labels.forEach(label=>{label.addEventListener('mouseenter',e=>{tooltip.textContent=e.target.dataset.tooltip;tooltip.style.opacity='1';tooltip.style.display='block'});label.addEventListener('mousemove',e=>{tooltip.style.left=`${e.clientX+15}px`;tooltip.style.top=`${e.clientY+15}px`});label.addEventListener('mouseleave',()=>{tooltip.style.opacity='0';setTimeout(()=>{if(tooltip.style.opacity==='0')tooltip.style.display='none'},200)})})}
 
-// --- NAVIGATION & ROUTING LOGIC ---
 function calculateAndFetchRoute(start, end) {
     if (boatAnimation) {
         boatAnimation.stopAnimation();
@@ -81,62 +80,70 @@ function calculateAndFetchRoute(start, end) {
     showMessage('Calculating route...', 'blue');
     navigationState = 'CALCULATING';
     
-    const params = {
+    // 1. Create the STATIC params object for the HUD and simple animation
+    const staticParamsForHUD = {
         speed: document.getElementById('shipSpeed').value, draft: document.getElementById('shipDraft').value,
         hpReq: document.getElementById('hpReq').value, fuelRate: document.getElementById('fuelRate').value,
         k: document.getElementById('hullFactor').value, baseWeight: document.getElementById('baseWeight').value,
         load: document.getElementById('load').value, F: document.getElementById('foulingFactor').value,
-        S: document.getElementById('seaStateFactor').value
+        S: document.getElementById('seaStateFactor').value,
+        windStrength: 1, windDirection: 1, currentStrength: 1, currentDirection: 1,
+        waveHeight: 1, waveDirection: 1, rainIntensity: 1, rainProbability: 1, seaDepth: 100
     };
 
-    // Get the date from the new input field
+    // 2. Get the Voyage Date that the SERVER needs
     const voyageDate = document.getElementById('voyageDate').value;
 
-    for (const key in params) {
-        if (!params[key] && params[key] !== 0) {
-            showMessage(`Error: Parameter '${key}' is missing. Please check vessel inputs.`, 'red');
-            navigationState = 'SET_END';
-            return;
-        }
-    }
-
+    // Validation
     if (!voyageDate) {
-    showMessage('Please select a voyage start date.', 'red');
-    navigationState = 'SET_END'; // Reset state so they can try again
-    return;
+        showMessage(`Error: Voyage Start Date is missing.`, 'red');
+        navigationState = 'SET_END';
+        return;
     }
+    // (You can add more validation for other fields here if needed)
 
     const startCoords = `${start.lat},${start.lng}`;
     const endCoords = `${end.lat},${end.lng}`;
-    let queryString = `start=${startCoords}&end=${endCoords}&` + Object.entries(params).map(([key, value]) => `${key}=${value}`).join('&') +`&voyageDate=${voyageDate}`;
-    if (useCustomGrid) {
-        queryString += '&useTemporaryGrid=true';//set the useTemporaryGrid to true (gm)
     
-    }
+    // 3. Construct the query string with vessel params AND the required voyageDate
+    const vesselQuery = Object.entries(staticParamsForHUD).map(([key, value]) => `${key}=${value}`).join('&');
+    const queryString = `start=${startCoords}&end=${endCoords}&${vesselQuery}&voyageDate=${voyageDate}`;
+
     fetch(`/api/route?${queryString}`)
         .then(response => {
-            if (!response.ok) throw new Error(`Server error: ${response.statusText}`);
+            if (!response.ok) {
+                throw new Error(`Server error: ${response.statusText}`);
+            }
             return response.json();
         })
+        .then(data => {
+            // 4. The server responds with a complex object { path, envData }
+            currentPath = data.path; // Unpack the path
+            console.log('Debugging Route Path:', currentPath); // markerdebug
 
-        //use envdata for UHD and boat (gm)
-        .then(data => { // The parameter is now 'data'
-            // Unpack the data object
-            currentPath = data.path;
-            envDataCache = data.envData; // Store the environmental data
-
-            //The rest of the logic uses 'currentPath' instead of 'path'
             if (currentPath && currentPath.length > 0) {
                 drawMultiColorPath(currentPath);
+
                 const totalDistanceKm = calculateTotalDistance(currentPath);
-                calculateAndDisplayMetrics(currentPath, params.speed, totalDistanceKm);
-                updateHud(params, totalDistanceKm);
+                calculateAndDisplayMetrics(
+                    currentPath,
+                    staticParamsForHUD.speed,
+                    totalDistanceKm
+                );
+
+                // 5. CRUCIAL: Use the STATIC params object to update the HUD, ignoring the live envData
+                updateHud(staticParamsForHUD, totalDistanceKm);
+
                 navigationState = 'ROUTE_DISPLAYED';
                 showMessage('Route found.', 'green');
 
                 if (isAnimationEnabled) {
-                    // Pass the new envDataCache to the animation
-                    boatAnimator.startAnimation(currentPath, params, envDataCache, totalDistanceKm);
+                    // 6. Start the animation with the STATIC params
+                    boatAnimator.startAnimation(
+                        currentPath,
+                        staticParamsForHUD,
+                        totalDistanceKm
+                    );
                 }
             } else {
                 currentPath = [];
@@ -145,16 +152,12 @@ function calculateAndFetchRoute(start, end) {
             }
         })
         .catch(error => {
-            if (error.name === 'AbortError') {
-                //when cancel route.
-                console.log('Route calculation was cancelled.');
-            } else {
-                //For any other errors.
-                console.error('Fetch error:', error);
-                showMessage('Failed to fetch route from server.', 'red');
-            }
+            currentPath = [];
+            console.error('Error fetching route:', error);
+            showMessage('Could not connect to the routing server.', 'red');
+            navigationState = 'SET_START';
         });
-}
+    }
 
 // --- UI UPDATE FUNCTIONS ---
 function onMapClick(e){if(editMode||navigationState==='CALCULATING')return;if(navigationState==='ROUTE_DISPLAYED'){resetNavigation(true);document.getElementById('startPort').value='';document.getElementById('endPort').value=''}if(navigationState==='SET_START'){startPoint=e.latlng;if(startMarker)map.removeLayer(startMarker);startMarker=L.circleMarker(startPoint,{color:'#10b981',radius:8,fillOpacity:0.8}).addTo(map);navigationState='SET_END';showMessage('Start point set. Double-click to set destination.','blue')}else if(navigationState==='SET_END'){endPoint=e.latlng;if(endMarker)map.removeLayer(endMarker);endMarker=L.circleMarker(endPoint,{color:'#ef4444',radius:8,fillOpacity:0.8}).addTo(map);calculateAndFetchRoute(startPoint,endPoint)}}
@@ -195,13 +198,9 @@ function resetNavigation(showMsg=true){boatAnimator.stopAnimation();currentPath=
 function updateHud(params, totalDistanceKm) {
     document.getElementById('hud-wind').textContent = `${params.windStrength} kts @ ${params.windDirection}°`;
     document.getElementById('hud-current').textContent = `${params.currentStrength} kts @ ${params.currentDirection}°`;
-    document.getElementById('hud-waves').textContent = `${params.waveHeight} m @ ${params.waveDirection}°`;
-    document.getElementById('hud-rain').textContent = `${params.rainIntensity} mm/h (${params.rainProbability}%)`;
-    document.getElementById('hud-sea-depth').textContent = `${params.seaDepth} m`;
-    // FIX: Set the initial distance left value correctly
+    document.getElementById('hud-waves').textContent = `${params.waveHeight} m`;
     document.getElementById('hud-distance-left').textContent = `${totalDistanceKm.toFixed(0)} km`;
     document.getElementById('navigation-hud').style.display = 'block';
-
 }
 
 function hideHud() {
@@ -279,14 +278,18 @@ function toggleBoatAnimation() {
         showMessage('Boat animation ON.', 'green');
         animButton.classList.add('toggled-on');
         if (navigationState === 'ROUTE_DISPLAYED' && currentPath && currentPath.length > 0) {
-            const params = { 
-                speed: document.getElementById('shipSpeed').value,
-                windStrength: 1, windDirection: 1,
-                currentStrength: 1, currentDirection: 1
+            
+            const params = {
+                speed: document.getElementById('shipSpeed').value, draft: document.getElementById('shipDraft').value,
+                hpReq: document.getElementById('hpReq').value, fuelRate: document.getElementById('fuelRate').value,
+                k: document.getElementById('hullFactor').value, baseWeight: document.getElementById('baseWeight').value,
+                load: document.getElementById('load').value, F: document.getElementById('foulingFactor').value,
+                S: document.getElementById('seaStateFactor').value,
+                windStrength: 1, windDirection: 1, currentStrength: 1, currentDirection: 1
+        
             };
-            // FIX: Pass the pre-calculated total distance to the animator
             const totalDistanceKm = calculateTotalDistance(currentPath);
-            boatAnimator.startAnimation(currentPath, params, envDataCache, totalDistanceKm);
+            boatAnimator.startAnimation(currentPath, params, totalDistanceKm);
             document.getElementById('hud-environmental-conditions').style.display = 'block';
             document.getElementById('navigation-hud').style.display = 'block';
         }
@@ -295,9 +298,10 @@ function toggleBoatAnimation() {
         animButton.classList.remove('toggled-on');
         boatAnimator.stopAnimation();
         document.getElementById('hud-environmental-conditions').style.display = 'none';
-        hideHud()
+        hideHud();
     }
 }
+
 
 function showMessage(text,color='blue'){messageBox.textContent=text;messageBox.className=`fixed top-5 left-1/2 -translate-x-1/2 bg-${color}-600 text-white py-3 px-6 rounded-lg shadow-lg z-[1000] text-center transition-opacity duration-300`;messageBox.style.opacity=1;setTimeout(()=>{messageBox.style.opacity=0},5000)}
 const CustomControl=L.Control.extend({options:{position:'bottomright',icon:'',title:'',action:()=>{},id:''},onAdd:function(){const container=L.DomUtil.create('div','leaflet-bar leaflet-control');container.innerHTML=`<a href="#" id="${this.options.id}" title="${this.options.title}" role="button" class="custom-control bg-gray-700 hover:bg-gray-600 flex items-center justify-center w-9 h-9 rounded-md shadow-md">${this.options.icon}</a>`;L.DomEvent.on(container,'click',e=>{L.DomEvent.stopPropagation(e);L.DomEvent.preventDefault(e);this.options.action()});return container}});

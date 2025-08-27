@@ -1,9 +1,24 @@
+// ===================================================================================
 // environmental-data-cache.js
-// Fetches a grid of environmental data and provides fast, synchronous access.
+// -----------------------------------------------------------------------------------
+// This module fetches a grid of environmental data from the Python server.
+// It uses a HIGHLY OPTIMIZED streaming parser to handle very large JSON responses
+// without crashing or causing significant slowdowns.
+// ===================================================================================
 
 const fetch = require('node-fetch');
+// NEW: Import the core parser and the optimized 'streamObject' utility
+const { parser } = require('stream-json');
+const { streamObject } = require('stream-json/streamers/StreamObject');
+const { chain } = require('stream-chain');
 
-// Helper to find the index of the closest value in a sorted array
+/**
+ * A helper function that efficiently finds the index of the value in a sorted array
+ * that is closest to a given target value using a binary search algorithm.
+ * @param {number[]} arr - The sorted array to search in (e.g., latitudes or longitudes).
+ * @param {number} target - The target value to find the closest match for.
+ * @returns {number} The index of the element in the array closest to the target.
+ */
 function findClosestIndex(arr, target) {
     let low = 0;
     let high = arr.length - 1;
@@ -19,15 +34,24 @@ function findClosestIndex(arr, target) {
     return low;
 }
 
+/**
+ * A class to manage fetching, caching, and accessing environmental data for a voyage.
+ */
 class EnvironmentalDataCache {
+    /**
+     * Creates an instance of the cache.
+     * @param {object} startLatLng - The starting coordinates of the voyage {lat, lng}.
+     * @param {object} endLatLng - The ending coordinates of the voyage {lat, lng}.
+     * @param {NavigationGrid} landGrid - The main land/water grid.
+     * @param {string} voyageDate - The starting date of the voyage in ISO format.
+     */
     constructor(startLatLng, endLatLng, landGrid, voyageDate) {
         this.voyageDate = voyageDate;
         this.data = null;
         this.FASTAPI_URL = "http://127.0.0.1:8000/get-data-grid/";
-        this.debugCounter = 0;
-        this.debugLogInterval = 500; // Log every 500 calls
 
         const PADDING = 5.0; // degrees
+
         this.bounds = {
             min_lat: Math.min(startLatLng.lat, endLatLng.lat) - PADDING,
             max_lat: Math.max(startLatLng.lat, endLatLng.lat) + PADDING,
@@ -39,6 +63,10 @@ class EnvironmentalDataCache {
         this.bounds.max_lat = Math.min(90, this.bounds.max_lat);
     }
 
+    /**
+     * Asynchronously fetches and loads environmental data using an optimized streaming parser.
+     * @returns {Promise<boolean>} A promise that resolves to 'true' if data was streamed successfully.
+     */
     async initialize() {
         console.log(`Fetching environmental data grid for bounds:`, this.bounds);
         try {
@@ -53,11 +81,30 @@ class EnvironmentalDataCache {
                 throw new Error(`FastAPI server returned an error: ${response.statusText}. Details: ${errorText}`);
             }
 
-            this.data = await response.json();
-            if (this.data.error || !this.data.lats || this.data.lats.length === 0) {
-                 throw new Error(`Received invalid data from Python server: ${this.data.error || 'Empty data grid'}`);
+            // This pipeline uses the optimized 'streamObject' which is much faster.
+            const pipeline = chain([
+                response.body,
+                parser(),
+                streamObject() // This utility efficiently assembles the entire JS object from the stream.
+            ]);
+            
+            // We listen for a single 'data' event which contains the final, fully parsed object.
+            pipeline.on('data', (data) => {
+                this.data = data.value;
+            });
+
+            // Wrap the stream processing in a Promise that resolves when the stream ends.
+            await new Promise((resolve, reject) => {
+                pipeline.on('end', () => resolve());
+                pipeline.on('error', (err) => reject(new Error(`JSON stream parsing error: ${err.message}`)));
+            });
+
+            // Perform validation on the final object.
+            if (!this.data || !this.data.lats || this.data.lats.length === 0) {
+                 throw new Error(`Received invalid or empty data from Python server via stream.`);
             }
-            console.log(`Successfully cached environmental data grid (${this.data.lats.length}x${this.data.lons.length}).`);
+
+            console.log(`Successfully cached environmental data grid (${this.data.lats.length}x${this.data.lons.length}) via optimized streaming.`);
             return true;
 
         } catch (error) {
@@ -69,6 +116,12 @@ class EnvironmentalDataCache {
         }
     }
 
+    /**
+     * Synchronously retrieves all environmental data for a specific coordinate point.
+     * @param {number} lat - The latitude of the point.
+     * @param {number} lon - The longitude of the point.
+     * @returns {object} An object containing all environmental parameters for that point.
+     */
     getData(lat, lon) {
         if (!this.data) {
             return { depth: null, wind_speed_mps: 0, wind_cardinal: 0, current_speed_mps: 0, current_cardinal: 0, waves_height_m: 0, weekly_precip_mean: 0, ice_conc: 0 };
@@ -77,14 +130,12 @@ class EnvironmentalDataCache {
         const lat_idx = findClosestIndex(this.data.lats, lat);
         const lon_idx = findClosestIndex(this.data.lons, lon);
 
-        // Helper function to safely get a value from a potentially missing grid
         const getValue = (gridName, defaultVal = -9999) => {
             const grid = this.data[gridName];
-            // Check if the grid, the row, and the cell all exist
             if (grid && grid[lat_idx] !== undefined && grid[lat_idx][lon_idx] !== undefined) {
                 return grid[lat_idx][lon_idx];
             }
-            return defaultVal; // Return default if any part is missing
+            return defaultVal;
         };
 
         const speed_asc = getValue('wind_speed_mps_asc');
@@ -118,24 +169,12 @@ class EnvironmentalDataCache {
         const weekly_precip_mean = getValue('precipitation');
         const ice_conc = getValue('ice_conc');
 
-        this.debugCounter++;
-        if (this.debugCounter % this.debugLogInterval === 0) {
-            console.log(`\n--- [Data for Node at Lat: ${lat.toFixed(3)}, Lon: ${lon.toFixed(3)}] ---`);
-            console.log(`  > Depth: ${depth > -9999 ? depth.toFixed(1) + 'm' : 'N/A'}`);
-            console.log(`  > Wind: ${final_wind_speed.toFixed(2)} m/s, Cardinal: ${final_wind_cardinal}`);
-            console.log(`  > Current: ${current_speed_mps > -9999 ? current_speed_mps.toFixed(2) : 'N/A'} m/s, Cardinal: ${current_cardinal}`);
-            console.log(`  > Waves: ${waves_height_m > -9999 ? waves_height_m.toFixed(2) : 'N/A'} m`);
-            console.log(`  > Precipitation: ${weekly_precip_mean > -9999 ? weekly_precip_mean.toFixed(4) : 'N/A'}`);
-            console.log(`  > Ice Concentration: ${ice_conc > -9999 ? ice_conc.toFixed(2) + '%' : 'N/A'}`);
-            console.log(`--------------------------------------------------`);
-        }
-
         return {
             depth: (depth > -9999) ? depth : null,
             wind_speed_mps: (final_wind_speed > -9999) ? final_wind_speed : 0,
-            wind_direction_deg: ((final_wind_cardinal > -9999) ? final_wind_cardinal : 0) * 45, // Converted to degrees
+            wind_direction_deg: ((final_wind_cardinal > -9999) ? final_wind_cardinal : 0) * 45,
             current_speed_mps: (current_speed_mps > -9999) ? current_speed_mps : 0,
-            current_direction_deg: ((current_cardinal > -9999) ? current_cardinal : 0) * 45, // Converted to degrees
+            current_direction_deg: ((current_cardinal > -9999) ? current_cardinal : 0) * 45,
             waves_height_m: (waves_height_m > -9999) ? waves_height_m : 0,
             weekly_precip_mean: (weekly_precip_mean > -9999) ? weekly_precip_mean : 0,
             ice_conc: (ice_conc > -9999) ? ice_conc : 0
@@ -143,4 +182,5 @@ class EnvironmentalDataCache {
     }
 }
 
+// Export the class so that server.js can use it.
 module.exports = EnvironmentalDataCache;

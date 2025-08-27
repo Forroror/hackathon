@@ -149,6 +149,25 @@ app.post('/api/grid/update', (req, res) => {
     }
 });
 
+// API endpoint to receive and store a temporary grid from the user
+app.post('/api/grid/temporary-upload', (req, res) => {
+    const newGridData = req.body;
+    // Validate that the uploaded data has the correct structure
+    if (!newGridData || !newGridData.grid || !newGridData.bounds) {
+        return res.status(400).json({ error: 'Invalid grid data.' });
+    }
+    try {
+        // Create a new NavigationGrid from the data and store it in memory
+        // Make sure you have 'let temporaryGrid = null;' at the top of your server.js
+        temporaryGrid = new NavigationGrid(newGridData);
+        console.log('Temporary grid received and loaded into memory.');
+        res.status(200).json({ message: 'Temporary grid loaded successfully.' });
+    } catch (error) {
+        console.error('Error loading temporary grid:', error);
+        res.status(500).json({ error: 'Failed to process temporary grid.' });
+    }
+});
+
 app.listen(port, () => {
     initializeServer();
     console.log(`Pathfinding server listening at http://localhost:${port}`);

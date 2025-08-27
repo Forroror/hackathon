@@ -341,7 +341,7 @@ class AStarPathfinder {
         return fuelPerKm;
     }
 
-    heuristic(a, b, grid, params, envCache) {
+    heuristic(a, b, grid, params, ) {
         const distanceKm = this.calculateDistance(a, b, grid);
         return this.calculateFuelPerKm(params) * distanceKm;
     }

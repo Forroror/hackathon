@@ -1,7 +1,7 @@
 // ============================================================
 // BOAT ANIMATION MODULE (boat.js)
 // ============================================================
-
+const animationDurationSeconds = 30;
 class BoatAnimator {
     constructor(map) {
         this.map = map;
@@ -10,11 +10,11 @@ class BoatAnimator {
         this.animationFrameId = null;
         this.isAnimating = false;
         this.environmentalParams = {};
-        this.envDataCache = null;
     }
 
+    //add div(gm)
     _createBoatIcon() {
-        const boatSVG = `<svg class="boat-icon" width="24" height="24" viewBox="0 0 24 24" fill="#3b82f6" stroke="white" stroke-width="1.5"><path d="M12 2L2 19h20L12 2z"/></svg>`;
+        const boatSVG = `<div class="boat-rotator"><svg class="boat-icon" width="24" height="24" viewBox="0 0 24 24" fill="#3b82f6" stroke="white" stroke-width="1.5"><path d="M12 2L2 19h20L12 2z"/></svg></div>`;
         return L.divIcon({
             html: boatSVG,
             className: 'boat-icon-wrapper',
@@ -23,37 +23,46 @@ class BoatAnimator {
         });
     }
 
-    startAnimation(path, params, animationDurationSeconds = 30) {
+    /**
+     * Starts the boat animation along a given path.
+     * @param {Array<object>} path - An array of {lat, lng} points for the route.
+     * @param {object} params - Static vessel and environmental parameters from the UI.
+     * @param {number} totalDistanceKm - The pre-calculated total distance of the route.
+     */
+    startAnimation(path, params, totalDistanceKm) {
         if (!path || path.length < 2) {
             showMessage('No route available to animate.', 'red');
             return;
         }
+
         this.stopAnimation();
         this.environmentalParams = params;
-        this.envDataCache = envDataCache;
 
+        // Create a GeoJSON line from the path for Turf.js calculations
         const lineCoords = path.map(p => [p.lng, p.lat]);
         const turfLine = turf.lineString(lineCoords);
-        const totalDistance = turf.length(turfLine, { units: 'kilometers' });
-        
-        // FIX: Ensure the marker is always created and added correctly
+
+        // Initialize the boat marker and trail line on the map
         if (!this.boatMarker) {
             const startLatLng = [path[0].lat, path[0].lng];
+            console.log('Boat.js is creating marker at:', startLatLng);//markerdebug
             this.boatMarker = L.marker(startLatLng, {
                 icon: this._createBoatIcon(),
                 zIndexOffset: 1000
             });
         }
         this.boatMarker.addTo(this.map);
-
         this.trailLine = L.polyline([], { color: '#1d4ed8', weight: 5 }).addTo(this.map);
 
+        // Show the UI panels
         document.getElementById('hud-animation-progress').classList.remove('hidden');
         document.getElementById('turn-by-turn-panel').classList.remove('hidden');
+
         this.isAnimating = true;
         const startTime = performance.now();
         const durationMs = animationDurationSeconds * 1000;
 
+        // The main animation loop
         const animate = (timestamp) => {
             if (!this.isAnimating) return;
 
@@ -61,16 +70,17 @@ class BoatAnimator {
             let progress = elapsed / durationMs;
             if (progress > 1) progress = 1;
 
-            const distanceAlong = totalDistance * progress;
-            //(gm)
+            const distanceAlong = totalDistanceKm * progress;
             const currentPoint = turf.along(turfLine, distanceAlong, { units: 'kilometers' });
-            const currentLatLng = [currentPoint.geometry.coordinates[1], currentPoint.geometry.coordinates[0]]; 
-            this.boatMarker.setLatLng(currentLatLng); 
-            const boatBearing = this.updateBearingAndRotation(currentPoint, distanceAlong, turfLine, totalDistance);
-            this.updateTrail(currentPoint, turfLine);
-            const currentSpeed = this.calculateCurrentSpeed(boatBearing, currentLatLng[0], currentLatLng[1]);
+            const currentLatLng = [currentPoint.geometry.coordinates[1], currentPoint.geometry.coordinates[0]];
+            
+            this.boatMarker.setLatLng(currentLatLng);
 
-            this.updateAnimationProgress(totalDistance - distanceAlong, currentSpeed);
+            // Update visuals and HUD info
+            const boatBearing = this.updateBearingAndRotation(currentPoint, distanceAlong, turfLine, totalDistanceKm);
+            this.updateTrail(currentPoint, turfLine);
+            const currentSpeed = this.calculateCurrentSpeed(boatBearing); // Uses the static method
+            this.updateAnimationProgress(totalDistanceKm - distanceAlong, currentSpeed);
             this.updateTurnInstruction(path, distanceAlong, boatBearing);
 
             if (progress < 1) {
@@ -113,8 +123,11 @@ class BoatAnimator {
         
         const iconElement = this.boatMarker.getElement();
         if (iconElement) {
-            iconElement.style.transformOrigin = 'center center';
-            iconElement.style.transform = `rotate(${bearing}deg)`;
+            const rotator = iconElement.querySelector('.boat-rotator');
+            if (rotator) {
+                rotator.style.transformOrigin = 'center center';
+                rotator.style.transform = `rotate(${bearing}deg)`;
+            }
         }
         return bearing;
     }
@@ -128,26 +141,29 @@ class BoatAnimator {
 
     // boat.js
 
-    calculateCurrentSpeed(boatBearing, currentLat, currentLng) { // <<< ADD currentLat, currentLng
-        const baseSpeed = parseFloat(this.environmentalParams.speed) || 15;
-        let speedModifier = 0;
-
-        // Get live data from the cache for the boat's current position
-        const liveEnvData = this.getEnvDataAtPoint(currentLat, currentLng);
-
-        if (liveEnvData) {
-            // Wind Effect
-            const windAngleDiff = Math.abs(boatBearing - liveEnvData.wind_direction_deg);
-            speedModifier += liveEnvData.wind_speed_mps * 0.5 * Math.cos(windAngleDiff * Math.PI / 180);
-
-            // Current Effect
-            const currentAngleDiff = Math.abs(boatBearing - liveEnvData.current_direction_deg);
-            speedModifier += liveEnvData.current_speed_mps * 1.5 * Math.cos(currentAngleDiff * Math.PI / 180);
+    /**
+     * Calculates the boat's current speed based on its bearing and static environmental factors.(gm)
+     * @param {number} boatBearing - The current bearing of the boat in degrees.
+     * @returns {number} The calculated current speed in knots.
+     */
+    calculateCurrentSpeed(boatBearing) {
+        // Start with the base speed from the UI, with a fallback
+        let baseSpeed = parseFloat(this.environmentalParams.speed);
+        if (isNaN(baseSpeed) || baseSpeed <= 0) {
+            baseSpeed = 15; // Default to 15 knots if input is invalid
         }
 
+        let speedModifier = 0;
+
+        const windAngleDiff = Math.abs(boatBearing - this.environmentalParams.windDirection);
+        speedModifier -= this.environmentalParams.windStrength * Math.cos(windAngleDiff * Math.PI / 180) * 0.5;
+
+        const currentAngleDiff = Math.abs(boatBearing - this.environmentalParams.currentDirection);
+        speedModifier -= this.environmentalParams.currentStrength * Math.cos(currentAngleDiff * Math.PI / 180) * 1.5;
+
+        // Ensure speed doesn't go to zero or negative
         return Math.max(0.1, baseSpeed + speedModifier);
     }
-
     updateAnimationProgress(distanceLeftKm, currentSpeedKnots) {
         const timeHoursLeft = currentSpeedKnots > 0 ? distanceLeftKm / (currentSpeedKnots * 1.852) : Infinity;
         const days = Math.floor(timeHoursLeft / 24);
@@ -209,34 +225,6 @@ class BoatAnimator {
         }
     }
 
-        //helper to get the current live data for boat
-        getEnvDataAtPoint(lat, lon) {
-        if (!this.envDataCache) return null;
 
-        // Helper to find the closest index
-        const findClosestIndex = (arr, target) => {
-            let low = 0, high = arr.length - 1;
-            while (low <= high) {
-                const mid = Math.floor((low + high) / 2);
-                if (arr[mid] === target) return mid;
-                if (arr[mid] < target) low = mid + 1;
-                else high = mid - 1;
-            }
-            return (low > 0 && (low === arr.length || Math.abs(arr[low] - target) > Math.abs(arr[low - 1] - target))) ? low - 1 : low;
-        };
 
-        const lat_idx = findClosestIndex(this.envDataCache.lats, lat);
-        const lon_idx = findClosestIndex(this.envDataCache.lons, lon);
-
-        const getValue = (gridName) => this.envDataCache[gridName]?.[lat_idx]?.[lon_idx];
-
-        //value need to show
-        return {
-            wind_direction_deg: getValue('wind_direction_deg'),
-            wind_speed_mps: getValue('wind_speed_mps'),
-            current_direction_deg: getValue('current_direction_deg'),
-            current_speed_mps: getValue('current_speed_mps'),
-        
-        };
-    }
 }
